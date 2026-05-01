@@ -1,0 +1,3 @@
+[console_scripts]
+fantasy-pl = fantasy_pl_ai_helper.cli.main:main
+fantasy-pl-api = fantasy_pl_ai_helper.api.app:run
