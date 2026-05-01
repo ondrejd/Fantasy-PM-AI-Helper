@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 520">
+  <!-- pitch background -->
+  <rect width="340" height="520" rx="12" ry="12" fill="#2e7d32"/>
+  <!-- stripes -->
+  <rect x="0" y="0" width="340" height="52" fill="#27722a" rx="0"/>
+  <rect x="0" y="104" width="340" height="52" fill="#27722a"/>
+  <rect x="0" y="208" width="340" height="52" fill="#27722a"/>
+  <rect x="0" y="312" width="340" height="52" fill="#27722a"/>
+  <rect x="0" y="416" width="340" height="52" fill="#27722a"/>
+  <!-- outer boundary -->
+  <rect x="16" y="16" width="308" height="488" rx="4" fill="none" stroke="#ffffff" stroke-width="2.5"/>
+  <!-- halfway line -->
+  <line x1="16" y1="260" x2="324" y2="260" stroke="#ffffff" stroke-width="2"/>
+  <!-- centre circle -->
+  <circle cx="170" cy="260" r="44" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="170" cy="260" r="3" fill="#ffffff"/>
+  <!-- top penalty area -->
+  <rect x="86" y="16" width="168" height="74" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <!-- top goal area -->
+  <rect x="124" y="16" width="92" height="32" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <!-- top penalty spot -->
+  <circle cx="170" cy="68" r="3" fill="#ffffff"/>
+  <!-- bottom penalty area -->
+  <rect x="86" y="430" width="168" height="74" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <!-- bottom goal area -->
+  <rect x="124" y="472" width="92" height="32" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <!-- bottom penalty spot -->
+  <circle cx="170" cy="452" r="3" fill="#ffffff"/>
+  <!-- corner arcs -->
+  <path d="M16,28 A12,12 0 0,1 28,16" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <path d="M312,16 A12,12 0 0,1 324,28" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <path d="M324,492 A12,12 0 0,1 312,504" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <path d="M28,504 A12,12 0 0,1 16,492" fill="none" stroke="#ffffff" stroke-width="2"/>
+</svg>
