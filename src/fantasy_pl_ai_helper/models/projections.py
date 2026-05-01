@@ -65,15 +65,21 @@ class ProjectionModel:
     def build(self) -> list[PlayerProjection]:
         """Build projections for all eligible players in the gameweek."""
         _ensure_projection_schema(self.connection)
-        pipeline = FeaturePipeline(
-            connection=self.connection,
-            gameweek_id=self.gameweek_id,
-        )
-        features = pipeline.build()
-
-        built_at = datetime.now(UTC).isoformat()
+        features, built_at = self._build_features(include_finished_fixtures=False)
         self._persist_feature_snapshots(features, built_at)
         return self.project_features(features, persist=True, built_at=built_at)
+
+    def backfill_feature_snapshots(self, include_finished_fixtures: bool = True) -> int:
+        """Build and persist feature snapshots for this gameweek only.
+
+        Returns number of snapshot rows written (upserted).
+        """
+        _ensure_projection_schema(self.connection)
+        features, built_at = self._build_features(
+            include_finished_fixtures=include_finished_fixtures
+        )
+        self._persist_feature_snapshots(features, built_at)
+        return len(features)
 
     def project_features(
         self,
@@ -117,6 +123,19 @@ class ProjectionModel:
         if persist:
             self._persist(projections, built_at)
         return projections
+
+    def _build_features(
+        self,
+        include_finished_fixtures: bool,
+    ) -> tuple[list[PlayerFeatures], str]:
+        pipeline = FeaturePipeline(
+            connection=self.connection,
+            gameweek_id=self.gameweek_id,
+            include_finished_fixtures=include_finished_fixtures,
+        )
+        features = pipeline.build()
+        built_at = datetime.now(UTC).isoformat()
+        return features, built_at
 
     # ------------------------------------------------------------------
     # Projection formula

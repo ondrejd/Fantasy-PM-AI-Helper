@@ -31,5 +31,8 @@ fantasy-pl-api = "fantasy_pl_ai_helper.api.app:run"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"fantasy_pl_ai_helper.storage" = ["schema.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

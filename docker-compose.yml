@@ -9,6 +9,7 @@ services:
     environment:
       FANTASY_PL_PROJECT_ROOT: /app
       FANTASY_PL_DATABASE_PATH: /app/data/fantasy_pl.sqlite3
+      FANTASY_PL_CORS_ORIGIN_REGEX: ^https?://(localhost|127\.0\.0\.1)(:\d+)?$
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: llama3.1:8b
     volumes:
@@ -18,6 +19,8 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: fantasy-pl-ollama
+    profiles:
+      - ai
     ports:
       - "11434:11434"
     volumes:

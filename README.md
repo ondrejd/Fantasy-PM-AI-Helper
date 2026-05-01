@@ -100,6 +100,31 @@ Dokumentace (Swagger UI): [http://localhost:8000/docs](http://localhost:8000/doc
 
 ---
 
+## Docker pro Flutter klient
+
+API lze spustit v Dockeru jedním příkazem:
+
+```bash
+docker compose up --build -d app
+```
+
+API poběží na `http://127.0.0.1:8000`.
+
+Pokud chceš i AI funkce přes Ollamu v Dockeru, spusť navíc profil `ai`:
+
+```bash
+docker compose --profile ai up --build -d
+```
+
+### Jakou URL zadat do Flutter aplikace
+
+- Flutter Linux / macOS / Windows / Web: `http://127.0.0.1:8000`
+- Flutter Android emulator: `http://10.0.2.2:8000`
+
+> CORS pro localhost je v Docker konfiguraci přednastavený, takže Flutter web funguje bez dalších úprav.
+
+---
+
 ## Bodování
 
 Bodování vychází z [`fantasy-bodovani-fotbal.md`](fantasy-bodovani-fotbal.md).
@@ -177,7 +202,7 @@ src/fantasy_pl_ai_helper/
 | `FANTASY_PL_PROJECTION_BACKEND` | `baseline` | Výchozí projekční backend |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | URL Ollama serveru |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Název modelu |
-| `OLLAMA_TIMEOUT_SECONDS` | `120` | Timeout pro AI požadavky |
+| `OLLAMA_TIMEOUT_SECONDS` | `600` | Timeout pro AI požadavky |
 
 ---
 

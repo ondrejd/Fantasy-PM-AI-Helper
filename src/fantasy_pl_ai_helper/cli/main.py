@@ -53,6 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
     train_ml_p.add_argument("--output", default=None,
         help="Output path for trained model artifact.")
 
+    backfill_p = subparsers.add_parser(
+        "backfill-snapshots",
+        help="Backfill feature snapshots for older gameweeks without rebuilding projections.",
+    )
+    backfill_p.add_argument("--from-gameweek", type=int, default=None,
+        help="First FPL gameweek number to include (default: oldest finished).")
+    backfill_p.add_argument("--to-gameweek", type=int, default=None,
+        help="Last FPL gameweek number to include (default: newest finished).")
+    backfill_p.add_argument("--include-unfinished", action="store_true",
+        help="Also include unfinished gameweeks.")
+
     recommend_p = subparsers.add_parser(
         "recommend-lineup",
         help="Build a recommended lineup for the given gameweek.",
@@ -86,6 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
     report_p = subparsers.add_parser("evaluate-report",
         help="Show historical evaluation trend.")
     report_p.add_argument("--rows", type=int, default=10)
+    report_p.add_argument("--ml-model-path", default=None,
+        help="Path to trained ML model artifact for baseline vs ml winner trend.")
+    report_p.add_argument("--primary-winner-metric", choices=["mae", "lineup_delta_abs"], default="mae",
+        help="Metric used for the primary winner column (backend_winner).")
+    report_p.add_argument("--from-gameweek", type=int, default=None,
+        help="First FPL gameweek number to include in report range.")
+    report_p.add_argument("--to-gameweek", type=int, default=None,
+        help="Last FPL gameweek number to include in report range.")
 
     explain_p = subparsers.add_parser("explain-lineup-ai",
         help="Use local LLM to explain the recommended lineup.")
@@ -147,6 +166,51 @@ def main(argv: list[str] | None = None) -> int:
             f"samples={summary['sample_count']} gameweeks={summary['gameweek_count']}  "
             f"features={summary['feature_count']} target_mean={summary['target_mean']:.2f}"
         )
+        return 0
+
+    if args.command == "backfill-snapshots":
+        settings = get_settings()
+        with connect(settings.database_path) as conn:
+            clauses: list[str] = []
+            params: list[int] = []
+            if not getattr(args, "include_unfinished", False):
+                clauses.append("finished = 1")
+            if getattr(args, "from_gameweek", None) is not None:
+                clauses.append("fpl_event_id >= ?")
+                params.append(args.from_gameweek)
+            if getattr(args, "to_gameweek", None) is not None:
+                clauses.append("fpl_event_id <= ?")
+                params.append(args.to_gameweek)
+
+            where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            gameweeks = conn.execute(
+                f"""
+                SELECT id, fpl_event_id, name, finished
+                FROM gameweeks
+                {where_sql}
+                ORDER BY fpl_event_id ASC
+                """,
+                params,
+            ).fetchall()
+
+            if not gameweeks:
+                print("No gameweeks match the requested range.")
+                return 0
+
+            total_rows = 0
+            print(f"Backfilling snapshots for {len(gameweeks)} gameweek(s)...")
+            for gw in gameweeks:
+                gw_id = int(gw["id"])
+                row_count = ProjectionModel(
+                    connection=conn,
+                    gameweek_id=gw_id,
+                ).backfill_feature_snapshots(include_finished_fixtures=True)
+                total_rows += row_count
+                print(
+                    f"- GW {gw['fpl_event_id']} ({gw['name']}): {row_count} snapshot row(s)"
+                )
+
+        print(f"Done. Total snapshot rows upserted: {total_rows}.")
         return 0
 
     if args.command == "rebuild-projections":
@@ -311,23 +375,65 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "evaluate-report":
         settings = get_settings()
+        model_path = Path(args.ml_model_path).expanduser().resolve() if args.ml_model_path else settings.model_artifact_path
         with connect(settings.database_path) as conn:
             gw_id = _resolve_gameweek(conn, None)
-            rows = ProjectionEvaluator(
+            report = ProjectionEvaluator(
                 connection=conn, gameweek_id=gw_id or 0
-            ).report(days=getattr(args, "rows", 10))
+            ).report(
+                days=getattr(args, "rows", 10),
+                model_artifact_path=model_path,
+                primary_winner_metric=getattr(args, "primary_winner_metric", "mae"),
+                from_gameweek=getattr(args, "from_gameweek", None),
+                to_gameweek=getattr(args, "to_gameweek", None),
+            )
+            rows = report["rows"]
 
         if not rows:
             print("Žádná evaluace. Spusť nejprve 'evaluate'.")
             return 0
-        print(f"\n{'Kolo':<20} {'Hráčů':>6}  {'MAE':>6}  {'RMSE':>6}  {'Bias':>6}  {'Delta':>7}  {'Miss%':>6}")
-        print("-" * 76)
+        primary_metric = report.get("primary_winner_metric", "mae")
+        print(
+            f"\n{'Kolo':<20} {'Hráčů':>6}  {'MAE':>6}  {'RMSE':>6}  {'Bias':>6}  {'Delta':>7}  {'Miss%':>6}  {'W_PRIMARY':>10}  {'W_MAE':>8}  {'W_DELTA':>8}"
+        )
+        print("-" * 113)
         for r in rows:
+            winner_primary = r.get("backend_winner") or "-"
+            winner_mae = r.get("backend_winner_mae") or r.get("backend_winner") or "-"
+            winner_delta = r.get("backend_winner_lineup_delta") or "-"
             print(
                 f"{r['gw_name']:<20} {r['evaluated_players']:>6}  "
                 f"{_fmt_num(r['mae']):>6}  {_fmt_num(r['rmse']):>6}  {_fmt_num(r['bias']):>6}  "
-                f"{_fmt_num(r.get('lineup_delta_actual_fpts')):>7}  {_fmt_num((r.get('missing_history_rate') or 0) * 100):>6}"
+                f"{_fmt_num(r.get('lineup_delta_actual_fpts')):>7}  {_fmt_num((r.get('missing_history_rate') or 0) * 100):>6}  {winner_primary:>10}  {winner_mae:>8}  {winner_delta:>8}"
             )
+
+        print(f"\nPrimary winner metric: {primary_metric}")
+
+        trend_mae = report.get("backend_winner_trend_mae")
+        if trend_mae:
+            print("\nBaseline vs ML winner trend (metric: MAE)")
+            print(
+                f"- compared_gws={trend_mae['compared_gameweeks']} "
+                f"baseline_wins={trend_mae['baseline_wins']} "
+                f"ml_wins={trend_mae['ml_wins']} ties={trend_mae['ties']} "
+                f"baseline_win_rate={_fmt_num((trend_mae['baseline_win_rate'] or 0) * 100)}% "
+                f"ml_win_rate={_fmt_num((trend_mae['ml_win_rate'] or 0) * 100)}%"
+            )
+        else:
+            print("\nBaseline vs ML winner trend (MAE) unavailable (missing comparisons or ML model).")
+
+        trend_delta = report.get("backend_winner_trend_lineup_delta")
+        if trend_delta:
+            print("\nBaseline vs ML winner trend (metric: abs lineup delta)")
+            print(
+                f"- compared_gws={trend_delta['compared_gameweeks']} "
+                f"baseline_wins={trend_delta['baseline_wins']} "
+                f"ml_wins={trend_delta['ml_wins']} ties={trend_delta['ties']} "
+                f"baseline_win_rate={_fmt_num((trend_delta['baseline_win_rate'] or 0) * 100)}% "
+                f"ml_win_rate={_fmt_num((trend_delta['ml_win_rate'] or 0) * 100)}%"
+            )
+        else:
+            print("\nBaseline vs ML winner trend (abs lineup delta) unavailable (missing comparisons or ML model).")
         return 0
 
     if args.command == "explain-lineup-ai":

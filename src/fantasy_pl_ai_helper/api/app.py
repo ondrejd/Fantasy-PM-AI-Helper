@@ -6,18 +6,23 @@ from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 from fantasy_pl_ai_helper.api.contracts import (
+    BackendWinnerTrendResponse,
     CurrentGameweekResponse,
     DataUpdateResponse,
     EvaluationReportResponse,
     EvaluationReportItem,
     EvaluationResponse,
+    GameweekFixtureItemResponse,
+    GameweekFixturesResponse,
     HealthResponse,
     LineupResponse,
     LineupSlotResponse,
     ProjectionItem,
     ProjectionsResponse,
+    WinnerTimelineItemResponse,
 )
 from fantasy_pl_ai_helper.config import Settings, get_settings
 from fantasy_pl_ai_helper.ingest.service import IngestService
@@ -42,6 +47,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="Fantasy PL AI Helper",
         version="0.1.0",
         lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_origin_regex=settings.cors_origin_regex,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     def get_conn() -> sqlite3.Connection:
@@ -77,16 +91,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/gameweeks/current", response_model=CurrentGameweekResponse)
     def gameweeks_current() -> CurrentGameweekResponse:
         with get_conn() as conn:
+            # Prefer the next gameweek for planning/recommendations.
             row = conn.execute(
                 """
                 SELECT id, fpl_event_id, name, deadline_time,
                        is_current, is_next, finished
                 FROM gameweeks
-                WHERE is_current = 1 OR is_next = 1
-                ORDER BY is_current DESC, id ASC
+                WHERE is_next = 1
+                ORDER BY fpl_event_id ASC
                 LIMIT 1
                 """
             ).fetchone()
+
+            if not row:
+                row = conn.execute(
+                    """
+                    SELECT id, fpl_event_id, name, deadline_time,
+                           is_current, is_next, finished
+                    FROM gameweeks
+                    WHERE is_current = 1
+                    ORDER BY fpl_event_id ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+
+            if not row:
+                row = conn.execute(
+                    """
+                    SELECT id, fpl_event_id, name, deadline_time,
+                           is_current, is_next, finished
+                    FROM gameweeks
+                    WHERE finished = 0
+                    ORDER BY fpl_event_id ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="No current/next gameweek found.")
         return CurrentGameweekResponse(
@@ -97,6 +136,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             is_current=bool(row["is_current"]),
             is_next=bool(row["is_next"]),
             finished=bool(row["finished"]),
+        )
+
+    @app.get("/v1/gameweeks/{gw_id}/fixtures", response_model=GameweekFixturesResponse)
+    def gameweek_fixtures(gw_id: int) -> GameweekFixturesResponse:
+        with get_conn() as conn:
+            _assert_gameweek_exists(conn, gw_id)
+            rows = conn.execute(
+                """
+                SELECT
+                    f.id,
+                    f.kickoff_time,
+                    f.started,
+                    f.finished,
+                    f.home_score,
+                    f.away_score,
+                    ht.full_name AS home_team_name,
+                    ht.short_name AS home_team_short_name,
+                    ht.fpl_team_id AS home_team_fpl_id,
+                    ht.logo_url AS home_team_logo_url,
+                    at.full_name AS away_team_name,
+                    at.short_name AS away_team_short_name,
+                    at.fpl_team_id AS away_team_fpl_id,
+                    at.logo_url AS away_team_logo_url
+                FROM fixtures f
+                JOIN teams ht ON ht.id = f.home_team_id
+                JOIN teams at ON at.id = f.away_team_id
+                WHERE f.gameweek_id = ?
+                ORDER BY f.kickoff_time ASC, f.id ASC
+                """,
+                (gw_id,),
+            ).fetchall()
+
+        fixtures = [
+            GameweekFixtureItemResponse(
+                fixture_id=r["id"],
+                kickoff_time=r["kickoff_time"],
+                started=bool(r["started"]),
+                finished=bool(r["finished"]),
+                home_score=r["home_score"],
+                away_score=r["away_score"],
+                home_team_name=r["home_team_name"],
+                home_team_short_name=r["home_team_short_name"],
+                home_team_fpl_id=r["home_team_fpl_id"],
+                home_team_logo_url=(
+                    r["home_team_logo_url"]
+                    or _default_team_logo_url(
+                        r["home_team_fpl_id"],
+                        team_name=r["home_team_name"],
+                        team_short_name=r["home_team_short_name"],
+                    )
+                ),
+                away_team_name=r["away_team_name"],
+                away_team_short_name=r["away_team_short_name"],
+                away_team_fpl_id=r["away_team_fpl_id"],
+                away_team_logo_url=(
+                    r["away_team_logo_url"]
+                    or _default_team_logo_url(
+                        r["away_team_fpl_id"],
+                        team_name=r["away_team_name"],
+                        team_short_name=r["away_team_short_name"],
+                    )
+                ),
+            )
+            for r in rows
+        ]
+
+        return GameweekFixturesResponse(
+            gameweek_id=gw_id,
+            count=len(fixtures),
+            fixtures=fixtures,
         )
 
     # ------------------------------------------------------------------
@@ -165,6 +274,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     salary=s["salary"],
                     salary_display=f"£{s['salary'] / 10:.1f}M",
                     projected_fpts=s["projected_fpts"],
+                    team_name=s.get("team_name"),
+                    team_short_name=s.get("team_short_name"),
+                    team_fpl_id=s.get("team_fpl_id"),
+                    team_logo_url=s.get("team_logo_url"),
                 )
                 for s in lineup["slots"]
             ],
@@ -193,12 +306,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/v1/evaluations/report", response_model=EvaluationReportResponse)
-    def evaluations_report(rows: int = Query(default=10, ge=1, le=100)) -> EvaluationReportResponse:
+    def evaluations_report(
+        rows: int = Query(default=10, ge=1, le=100),
+        primary_winner_metric: str = Query(default="mae", pattern="^(mae|lineup_delta_abs)$"),
+        from_gameweek: int | None = Query(default=None, ge=1, le=38),
+        to_gameweek: int | None = Query(default=None, ge=1, le=38),
+    ) -> EvaluationReportResponse:
         with get_conn() as conn:
             # Use a dummy gameweek_id; report() doesn't filter by it
             evaluator = ProjectionEvaluator(connection=conn, gameweek_id=0)
-            report_rows = evaluator.report(days=rows)
+            report = evaluator.report(
+                days=rows,
+                model_artifact_path=settings.model_artifact_path,
+                primary_winner_metric=primary_winner_metric,
+                from_gameweek=from_gameweek,
+                to_gameweek=to_gameweek,
+            )
+            report_rows = report["rows"]
+            trend_mae = report.get("backend_winner_trend_mae")
+            trend_lineup_delta = report.get("backend_winner_trend_lineup_delta")
+            winner_timeline = report.get("winner_timeline") or []
         return EvaluationReportResponse(
+            primary_winner_metric=report.get("primary_winner_metric", primary_winner_metric),
+            applied_from_gameweek=from_gameweek,
+            applied_to_gameweek=to_gameweek,
             rows=[
                 EvaluationReportItem(
                     gameweek_id=r["gameweek_id"],
@@ -209,9 +340,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     bias=r["bias"],
                     lineup_delta_actual_fpts=r.get("lineup_delta_actual_fpts"),
                     missing_history_rate=r.get("missing_history_rate"),
+                    backend_winner=r.get("backend_winner"),
+                    backend_winner_mae=r.get("backend_winner_mae"),
+                    backend_winner_lineup_delta=r.get("backend_winner_lineup_delta"),
                 )
                 for r in report_rows
-            ]
+            ],
+            backend_winner_trend_mae=(
+                BackendWinnerTrendResponse(**trend_mae) if trend_mae is not None else None
+            ),
+            backend_winner_trend_lineup_delta=(
+                BackendWinnerTrendResponse(**trend_lineup_delta)
+                if trend_lineup_delta is not None
+                else None
+            ),
+            winner_timeline=[
+                WinnerTimelineItemResponse(**item)
+                for item in winner_timeline
+            ],
         )
 
     return app
@@ -235,6 +381,11 @@ def _load_projections(conn: sqlite3.Connection, gw_id: int) -> list[dict]:
             pp.player_id,
             p.fpl_player_id,
             p.full_name,
+            p.team_id,
+            t.full_name AS team_name,
+            t.short_name AS team_short_name,
+            t.fpl_team_id AS team_fpl_id,
+            t.logo_url AS team_logo_url,
             pp.position,
             pp.salary,
             pp.projected_fpts,
@@ -246,6 +397,7 @@ def _load_projections(conn: sqlite3.Connection, gw_id: int) -> list[dict]:
             pp.notes
         FROM player_projections pp
         JOIN players p ON p.id = pp.player_id
+        LEFT JOIN teams t ON t.id = p.team_id
         WHERE pp.gameweek_id = ?
         """,
         (gw_id,),
@@ -269,7 +421,95 @@ def _projection_to_item(p: dict) -> ProjectionItem:
         fixture_difficulty=p.get("fixture_difficulty"),
         team_win_prob=p.get("team_win_prob"),
         notes=p.get("notes") or "",
+        team_name=p.get("team_name"),
+        team_short_name=p.get("team_short_name"),
+        team_fpl_id=p.get("team_fpl_id"),
+        team_logo_url=(
+            p.get("team_logo_url")
+            or _default_team_logo_url(
+                p.get("team_fpl_id"),
+                team_name=p.get("team_name"),
+                team_short_name=p.get("team_short_name"),
+            )
+        ),
     )
+
+
+def _default_team_logo_url(
+    fpl_team_id: int | None,
+    team_name: str | None = None,
+    team_short_name: str | None = None,
+) -> str | None:
+    """Build a robust PL badge URL.
+
+    FPL team_id and PL badge code are not always identical, so resolve by
+    known team names/short names when possible and only then fall back.
+    """
+
+    name_to_badge_code = {
+        "arsenal": 3,
+        "aston villa": 7,
+        "avl": 7,
+        "bournemouth": 91,
+        "bou": 91,
+        "brentford": 94,
+        "bre": 94,
+        "brighton": 36,
+        "brighton and hove albion": 36,
+        "bha": 36,
+        "burnley": 90,
+        "bur": 90,
+        "chelsea": 8,
+        "crystal palace": 31,
+        "cry": 31,
+        "everton": 11,
+        "fulham": 54,
+        "ful": 54,
+        "ipswich": 40,
+        "ipswich town": 40,
+        "ips": 40,
+        "leicester": 13,
+        "leicester city": 13,
+        "lei": 13,
+        "liverpool": 14,
+        "man city": 43,
+        "manchester city": 43,
+        "mci": 43,
+        "man utd": 1,
+        "manchester united": 1,
+        "mun": 1,
+        "newcastle": 4,
+        "newcastle united": 4,
+        "new": 4,
+        "nott'm forest": 17,
+        "nottingham forest": 17,
+        "nfo": 17,
+        "southampton": 20,
+        "sou": 20,
+        "tottenham": 6,
+        "tottenham hotspur": 6,
+        "spurs": 6,
+        "tot": 6,
+        "west ham": 21,
+        "west ham united": 21,
+        "whu": 21,
+        "wolves": 39,
+        "wolverhampton": 39,
+        "wolverhampton wanderers": 39,
+        "wol": 39,
+    }
+
+    badge_code: int | None = None
+    if team_name:
+        badge_code = name_to_badge_code.get(team_name.strip().lower())
+    if badge_code is None and team_short_name:
+        badge_code = name_to_badge_code.get(team_short_name.strip().lower())
+    if badge_code is None:
+        badge_code = fpl_team_id
+
+    if not badge_code:
+        return None
+    return f"https://resources.premierleague.com/premierleague/badges/70/t{badge_code}.png"
 
 
 # ---------------------------------------------------------------------------

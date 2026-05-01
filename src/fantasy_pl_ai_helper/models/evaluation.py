@@ -35,6 +35,36 @@ class BackendComparison(TypedDict):
     lineup_delta_actual_fpts: float | None
 
 
+class BackendWinnerTrend(TypedDict):
+    metric: str
+    compared_gameweeks: int
+    baseline_wins: int
+    ml_wins: int
+    ties: int
+    baseline_win_rate: float | None
+    ml_win_rate: float | None
+
+
+class EvaluationReportSummary(TypedDict):
+    rows: list[dict]
+    backend_winner_trend_mae: BackendWinnerTrend | None
+    backend_winner_trend_lineup_delta: BackendWinnerTrend | None
+    winner_timeline: list[dict]
+    primary_winner_metric: str
+
+
+class WinnerTimelineItem(TypedDict):
+    gameweek_id: int
+    gw_name: str
+    winner_mae: str | None
+    winner_lineup_delta: str | None
+    winner_primary: str | None
+    baseline_mae: float | None
+    ml_mae: float | None
+    baseline_lineup_delta_abs: float | None
+    ml_lineup_delta_abs: float | None
+
+
 @dataclass(slots=True)
 class ProjectionEvaluator:
     """Evaluate stored projections against realized GW outcomes."""
@@ -136,22 +166,127 @@ class ProjectionEvaluator:
             backend_comparisons=backend_comparisons,
         )
 
-    def report(self, days: int = 10) -> list[dict]:
+    def report(
+        self,
+        days: int = 10,
+        model_artifact_path: Path | str | None = None,
+        primary_winner_metric: str = "mae",
+        from_gameweek: int | None = None,
+        to_gameweek: int | None = None,
+    ) -> EvaluationReportSummary:
+        if primary_winner_metric not in ("mae", "lineup_delta_abs"):
+            primary_winner_metric = "mae"
+
+        clauses: list[str] = []
+        params: list[int] = []
+        if from_gameweek is not None:
+            clauses.append("gw.fpl_event_id >= ?")
+            params.append(from_gameweek)
+        if to_gameweek is not None:
+            clauses.append("gw.fpl_event_id <= ?")
+            params.append(to_gameweek)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
         rows = self.connection.execute(
-            """
+            f"""
             SELECT pe.gameweek_id, gw.name AS gw_name,
                    pe.evaluated_players, pe.mae, pe.rmse, pe.bias,
                      pe.lineup_delta_actual_fpts, pe.missing_history_rate, pe.created_at
             FROM projection_evaluations pe
             JOIN gameweeks gw ON gw.id = pe.gameweek_id
+            {where_sql}
             ORDER BY pe.created_at DESC
             LIMIT ?
             """,
-            (days,),
+            (*params, days),
         ).fetchall()
-        return [dict(r) for r in rows]
+        report_rows = [dict(r) for r in rows]
+
+        mae_counts = {"baseline": 0, "ml": 0, "tie": 0}
+        delta_counts = {"baseline": 0, "ml": 0, "tie": 0}
+        mae_compared = 0
+        delta_compared = 0
+        timeline: list[WinnerTimelineItem] = []
+
+        for row in report_rows:
+            gw_id = int(row["gameweek_id"])
+            actual_by_player = self._actual_fpts_by_player_for_gameweek(gw_id)
+            gw_evaluator = ProjectionEvaluator(
+                connection=self.connection,
+                gameweek_id=gw_id,
+                scoring_engine=self.scoring_engine,
+            )
+            comparisons = gw_evaluator._compare_backends(actual_by_player, model_artifact_path)
+            mae_winner = _backend_winner(comparisons, metric="mae")
+            delta_winner = _backend_winner(comparisons, metric="lineup_delta_actual_fpts")
+            primary_winner = mae_winner if primary_winner_metric == "mae" else delta_winner
+
+            baseline_mae = _backend_metric_value(comparisons, "baseline", "mae")
+            ml_mae = _backend_metric_value(comparisons, "ml", "mae")
+            baseline_delta = _backend_metric_value(comparisons, "baseline", "lineup_delta_actual_fpts")
+            ml_delta = _backend_metric_value(comparisons, "ml", "lineup_delta_actual_fpts")
+
+            row["backend_winner"] = primary_winner
+            row["backend_winner_mae"] = mae_winner
+            row["backend_winner_lineup_delta"] = delta_winner
+            row["primary_winner_metric"] = primary_winner_metric
+            if mae_winner in ("baseline", "ml", "tie"):
+                mae_counts[mae_winner] += 1
+                mae_compared += 1
+            if delta_winner in ("baseline", "ml", "tie"):
+                delta_counts[delta_winner] += 1
+                delta_compared += 1
+
+            timeline.append(
+                WinnerTimelineItem(
+                    gameweek_id=gw_id,
+                    gw_name=str(row["gw_name"]),
+                    winner_mae=mae_winner,
+                    winner_lineup_delta=delta_winner,
+                    winner_primary=primary_winner,
+                    baseline_mae=baseline_mae,
+                    ml_mae=ml_mae,
+                    baseline_lineup_delta_abs=abs(baseline_delta) if baseline_delta is not None else None,
+                    ml_lineup_delta_abs=abs(ml_delta) if ml_delta is not None else None,
+                )
+            )
+
+        trend_mae: BackendWinnerTrend | None = None
+        if mae_compared > 0:
+            trend_mae = BackendWinnerTrend(
+                metric="mae",
+                compared_gameweeks=mae_compared,
+                baseline_wins=mae_counts["baseline"],
+                ml_wins=mae_counts["ml"],
+                ties=mae_counts["tie"],
+                baseline_win_rate=round(mae_counts["baseline"] / mae_compared, 4),
+                ml_win_rate=round(mae_counts["ml"] / mae_compared, 4),
+            )
+
+        trend_delta: BackendWinnerTrend | None = None
+        if delta_compared > 0:
+            trend_delta = BackendWinnerTrend(
+                metric="lineup_delta_abs",
+                compared_gameweeks=delta_compared,
+                baseline_wins=delta_counts["baseline"],
+                ml_wins=delta_counts["ml"],
+                ties=delta_counts["tie"],
+                baseline_win_rate=round(delta_counts["baseline"] / delta_compared, 4),
+                ml_win_rate=round(delta_counts["ml"] / delta_compared, 4),
+            )
+
+        return EvaluationReportSummary(
+            rows=report_rows,
+            backend_winner_trend_mae=trend_mae,
+            backend_winner_trend_lineup_delta=trend_delta,
+            winner_timeline=sorted(timeline, key=lambda item: item["gameweek_id"]),
+            primary_winner_metric=primary_winner_metric,
+        )
 
     def _actual_fpts_by_player(self) -> dict[int, float]:
+        return self._actual_fpts_by_player_for_gameweek(self.gameweek_id)
+
+    def _actual_fpts_by_player_for_gameweek(self, gameweek_id: int) -> dict[int, float]:
         rows = self.connection.execute(
             """
             SELECT pgl.player_id, p.position,
@@ -162,10 +297,10 @@ class ProjectionEvaluator:
             FROM player_game_logs pgl
             JOIN fixtures f ON f.id = pgl.fixture_id
             JOIN players p ON p.id = pgl.player_id
-            WHERE f.gameweek_id = ?
+                        WHERE f.gameweek_id = ?
               AND f.finished = 1
             """,
-            (self.gameweek_id,),
+                        (gameweek_id,),
         ).fetchall()
 
         result: dict[int, float] = {}
@@ -314,3 +449,45 @@ class ProjectionEvaluator:
                 self.connection.execute(
                     f"ALTER TABLE player_projections ADD COLUMN {col} {typ}"
                 )
+
+
+def _backend_winner(
+    comparisons: list[BackendComparison],
+    metric: str = "mae",
+) -> str | None:
+    metric_values: dict[str, float] = {}
+    for row in comparisons:
+        backend_name = str(row["backend"])
+        value = row.get(metric)
+        if value is None:
+            continue
+        v = float(value)
+        if metric == "lineup_delta_actual_fpts":
+            v = abs(v)
+        metric_values[backend_name] = v
+
+    if "baseline" not in metric_values or "ml" not in metric_values:
+        return None
+
+    baseline_metric = metric_values["baseline"]
+    ml_metric = metric_values["ml"]
+    if baseline_metric < ml_metric:
+        return "baseline"
+    if ml_metric < baseline_metric:
+        return "ml"
+    return "tie"
+
+
+def _backend_metric_value(
+    comparisons: list[BackendComparison],
+    backend: str,
+    metric: str,
+) -> float | None:
+    for row in comparisons:
+        if str(row.get("backend")) != backend:
+            continue
+        value = row.get(metric)
+        if value is None:
+            return None
+        return float(value)
+    return None

@@ -59,12 +59,32 @@ def test_evaluate_report_rows_default():
     parser = build_parser()
     args = parser.parse_args(["evaluate-report"])
     assert args.rows == 10
+    assert args.primary_winner_metric == "mae"
 
 
 def test_evaluate_report_rows_custom():
     parser = build_parser()
     args = parser.parse_args(["evaluate-report", "--rows", "5"])
     assert args.rows == 5
+
+
+def test_evaluate_report_with_ml_model_path():
+    parser = build_parser()
+    args = parser.parse_args([
+        "evaluate-report", "--rows", "5", "--ml-model-path", "model.pkl", "--primary-winner-metric", "lineup_delta_abs"
+    ])
+    assert args.rows == 5
+    assert args.ml_model_path == "model.pkl"
+    assert args.primary_winner_metric == "lineup_delta_abs"
+
+
+def test_evaluate_report_with_range_filters():
+    parser = build_parser()
+    args = parser.parse_args([
+        "evaluate-report", "--from-gameweek", "10", "--to-gameweek", "20"
+    ])
+    assert args.from_gameweek == 10
+    assert args.to_gameweek == 20
 
 
 def test_train_ml_model_defaults():
@@ -80,3 +100,25 @@ def test_recommend_lineup_with_ml_backend():
     args = parser.parse_args(["recommend-lineup", "--backend", "ml", "--ml-model-path", "foo.pkl"])
     assert args.backend == "ml"
     assert args.ml_model_path == "foo.pkl"
+
+
+def test_backfill_snapshots_defaults():
+    parser = build_parser()
+    args = parser.parse_args(["backfill-snapshots"])
+    assert args.command == "backfill-snapshots"
+    assert args.from_gameweek is None
+    assert args.to_gameweek is None
+    assert args.include_unfinished is False
+
+
+def test_backfill_snapshots_with_range_and_unfinished():
+    parser = build_parser()
+    args = parser.parse_args([
+        "backfill-snapshots",
+        "--from-gameweek", "5",
+        "--to-gameweek", "10",
+        "--include-unfinished",
+    ])
+    assert args.from_gameweek == 5
+    assert args.to_gameweek == 10
+    assert args.include_unfinished is True

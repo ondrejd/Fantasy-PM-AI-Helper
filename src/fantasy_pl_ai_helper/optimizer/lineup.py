@@ -23,6 +23,11 @@ class LineupSlot(TypedDict):
     salary: int
     projected_fpts: float
     slot_fpts: float
+    team_id: int | None
+    team_name: str | None
+    team_short_name: str | None
+    team_fpl_id: int | None
+    team_logo_url: str | None
 
 
 class OptimizedLineup(TypedDict):
@@ -217,6 +222,11 @@ def _build_lineup(
                 salary=p["salary"],
                 projected_fpts=p["projected_fpts"],
                 slot_fpts=p["projected_fpts"],
+                team_id=p.get("team_id"),
+                team_name=p.get("team_name"),
+                team_short_name=p.get("team_short_name"),
+                team_fpl_id=p.get("team_fpl_id"),
+                team_logo_url=p.get("team_logo_url"),
             )
         )
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from importlib import resources
 from pathlib import Path
 
 from fantasy_pl_ai_helper.storage.database import connect
 
 
 def initialize_database(database_path: Path) -> None:
-    schema_path = Path(__file__).with_name("schema.sql")
-    schema_sql = schema_path.read_text(encoding="utf-8")
+    # Load schema from package resources so it works both in source tree and
+    # when installed from wheel inside Docker/site-packages.
+    schema_sql = resources.files("fantasy_pl_ai_helper.storage").joinpath(
+        "schema.sql"
+    ).read_text(encoding="utf-8")
 
     with connect(database_path) as connection:
         connection.executescript(schema_sql)

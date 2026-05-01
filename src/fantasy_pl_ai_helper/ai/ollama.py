@@ -15,7 +15,7 @@ class OllamaError(Exception):
 class OllamaClient:
     base_url: str = "http://127.0.0.1:11434"
     model: str = "llama3.1:8b"
-    timeout_seconds: float = 120.0
+    timeout_seconds: float = 600.0
 
     def chat(self, system: str, user: str) -> str:
         url = f"{self.base_url.rstrip('/')}/api/chat"

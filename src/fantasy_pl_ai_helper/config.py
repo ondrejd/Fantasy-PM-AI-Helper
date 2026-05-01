@@ -20,10 +20,18 @@ class Settings:
     model_artifact_path: Path
     # FPL budget cap in £0.1M units (1000 = £100M)
     salary_cap: int
+    cors_origins: list[str]
+    cors_origin_regex: str
 
     @classmethod
     def from_root(cls, project_root: Path) -> "Settings":
         data_dir = project_root / "data"
+        cors_origins_raw = os.getenv("FANTASY_PL_CORS_ORIGINS", "")
+        cors_origins = [
+            origin.strip()
+            for origin in cors_origins_raw.split(",")
+            if origin.strip()
+        ]
         return cls(
             project_root=project_root,
             database_path=data_dir / "fantasy_pl.sqlite3",
@@ -33,10 +41,15 @@ class Settings:
             odds_api_key=os.getenv("ODDS_API_KEY"),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             ollama_model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
-            ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+            ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600")),
             projection_backend=os.getenv("FANTASY_PL_PROJECTION_BACKEND", "baseline"),
             model_artifact_path=(data_dir / "models" / "latest.pkl"),
             salary_cap=1000,  # £100M in 0.1M units
+            cors_origins=cors_origins,
+            cors_origin_regex=os.getenv(
+                "FANTASY_PL_CORS_ORIGIN_REGEX",
+                r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+            ),
         )
 
 

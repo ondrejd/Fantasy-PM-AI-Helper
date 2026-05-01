@@ -1,0 +1,4 @@
+include README.md
+include fantasy-bodovani-fotbal.md
+include src/fantasy_pl_ai_helper/storage/schema.sql
+recursive-include src *.sql
