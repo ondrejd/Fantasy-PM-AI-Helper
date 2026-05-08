@@ -328,12 +328,37 @@ def main(argv: list[str] | None = None) -> int:
             f"(backend: {backend}, proj. body: {lineup['total_fpts']:.1f}, "
             f"cena: {_gw_label(lineup['total_salary'])})\n"
         )
-        print(f"{'Slot':<6} {'Hráč':<26} {'Pos':<4} {'Proj':>6}  {'Cena':>7}")
-        print("-" * 60)
+        print(f"{'Slot':<6} {'Hráč':<40} {'Pos':<4} {'Proj':>6}  {'Cena':>7}")
+        print("-" * 74)
+
+        slot_team_ids = {
+            int(s["team_id"]) for s in lineup["slots"] if s.get("team_id") is not None
+        }
+        teams_by_id: dict[int, str] = {}
+        if slot_team_ids:
+            placeholders = ",".join("?" for _ in slot_team_ids)
+            with connect(settings.database_path) as conn:
+                rows = conn.execute(
+                    f"SELECT id, full_name, short_name FROM teams WHERE id IN ({placeholders})",
+                    tuple(sorted(slot_team_ids)),
+                ).fetchall()
+            teams_by_id = {
+                int(row["id"]): (row["full_name"] or row["short_name"] or "?")
+                for row in rows
+            }
+
         for s in lineup["slots"]:
             pos = POSITION_NAMES.get(s["position"], "?")
+            team_id = s.get("team_id")
+            team_name = (
+                s.get("team_name")
+                or s.get("team_short_name")
+                or (teams_by_id.get(int(team_id)) if team_id is not None else None)
+                or "?"
+            )
+            player_with_team = f"{s['full_name']} ({team_name})"
             print(
-                f"{s['slot']:<6} {s['full_name']:<26} {pos:<4} "
+                f"{s['slot']:<6} {player_with_team:<40} {pos:<4} "
                 f"{s['projected_fpts']:>6.1f}  {_gw_label(s['salary']):>7}"
             )
         return 0
