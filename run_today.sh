@@ -9,19 +9,30 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
+# Spouštěj CLI přes modul, aby skript fungoval i bez pip install -e .
+if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+else
+    PYTHON_BIN="python3"
+fi
+
+run_cli() {
+    PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -m fantasy_pl_ai_helper "$@"
+}
+
 echo "=== Fantasy PL AI Helper — $(date '+%Y-%m-%d %H:%M') ==="
 echo ""
 
 echo "[1/3] Aktualizace dat z FPL API..."
-fantasy-pl update-data
+run_cli update-data
 echo ""
 
 echo "[2/3] Přepočet projekcí pro aktuální kolo..."
-fantasy-pl rebuild-projections
+run_cli rebuild-projections
 echo ""
 
 echo "[3/3] Doporučená sestava..."
-fantasy-pl recommend-lineup
+run_cli recommend-lineup
 echo ""
 
 echo "=== Hotovo ==="

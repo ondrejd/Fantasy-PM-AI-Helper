@@ -56,6 +56,7 @@ class LineupOptimizer:
 
     gameweek_id: int
     salary_cap: int = 1000  # £100M in 0.1M units
+    selection_salary_markup: float = 0.0
     excluded_player_ids: set[int] = field(default_factory=set)
     locked_player_ids: set[int] = field(default_factory=set)
 
@@ -109,8 +110,9 @@ class LineupOptimizer:
 
             all_players = [gk] + sel_def + sel_mid + sel_fwd
             total_salary = sum(p["salary"] for p in all_players)
+            effective_total_salary = sum(self._effective_salary(p["salary"]) for p in all_players)
 
-            if total_salary > self.salary_cap:
+            if effective_total_salary > self.salary_cap:
                 # Try to fit within budget: swap most expensive players for cheaper
                 all_players = self._fit_budget(
                     gk, sel_def, sel_mid, sel_fwd,
@@ -147,7 +149,7 @@ class LineupOptimizer:
         Uses a simple greedy: iterate salary-sorted candidates and pick
         the cheapest combination that still maximises points.
         """
-        budget_left = self.salary_cap - gk["salary"]
+        budget_left = self.salary_cap - self._effective_salary(gk["salary"])
         if budget_left < 0:
             return None
 
@@ -176,7 +178,7 @@ class LineupOptimizer:
             for m_sel in combinations(m_candidates, n_mid):
                 for f_sel in combinations(f_candidates, n_fwd):
                     players = list(d_sel) + list(m_sel) + list(f_sel)
-                    total_sal = sum(p["salary"] for p in players)
+                    total_sal = sum(self._effective_salary(p["salary"]) for p in players)
                     if total_sal <= budget_left:
                         total_fpts = sum(p["projected_fpts"] for p in players)
                         if total_fpts > best_score:
@@ -186,6 +188,10 @@ class LineupOptimizer:
         if best is None:
             return None
         return [gk] + best
+
+    def _effective_salary(self, salary: int) -> float:
+        # Applies optional selection-time salary markup without changing stored DB values.
+        return float(salary) * (1.0 + max(0.0, self.selection_salary_markup))
 
 
 # ---------------------------------------------------------------------------

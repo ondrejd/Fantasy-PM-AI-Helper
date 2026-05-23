@@ -29,7 +29,10 @@ class LocalAIService:
         if not projections:
             return "Žádné projekce pro toto kolo."
 
-        lineup = LineupOptimizer(gameweek_id=gameweek_id).optimize(projections)
+        lineup = LineupOptimizer(
+            gameweek_id=gameweek_id,
+            selection_salary_markup=0.20,
+        ).optimize(projections)
         if not lineup:
             return "Nepodařilo se sestavit doporučenou sestavu."
 

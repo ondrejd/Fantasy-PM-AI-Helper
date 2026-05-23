@@ -251,6 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         optimizer = LineupOptimizer(
             gameweek_id=gw_id,
+            selection_salary_markup=0.20,
             excluded_player_ids=set(exclude),
             locked_player_ids=set(lock),
         )

@@ -315,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
 
         optimizer = LineupOptimizer(
             gameweek_id=gw_id,
+            selection_salary_markup=0.20,
             excluded_player_ids=set(args.exclude or []),
             locked_player_ids=set(args.lock or []),
         )

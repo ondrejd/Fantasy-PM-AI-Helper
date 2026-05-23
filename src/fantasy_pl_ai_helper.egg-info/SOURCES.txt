@@ -1,4 +1,6 @@
+MANIFEST.in
 README.md
+fantasy-bodovani-fotbal.md
 pyproject.toml
 src/fantasy_pl_ai_helper/__init__.py
 src/fantasy_pl_ai_helper/__main__.py
@@ -21,9 +23,11 @@ src/fantasy_pl_ai_helper/features/__init__.py
 src/fantasy_pl_ai_helper/features/pipeline.py
 src/fantasy_pl_ai_helper/ingest/__init__.py
 src/fantasy_pl_ai_helper/ingest/fpl_client.py
+src/fantasy_pl_ai_helper/ingest/odds_client.py
 src/fantasy_pl_ai_helper/ingest/service.py
 src/fantasy_pl_ai_helper/models/__init__.py
 src/fantasy_pl_ai_helper/models/evaluation.py
+src/fantasy_pl_ai_helper/models/ml.py
 src/fantasy_pl_ai_helper/models/projections.py
 src/fantasy_pl_ai_helper/optimizer/__init__.py
 src/fantasy_pl_ai_helper/optimizer/lineup.py
@@ -32,7 +36,10 @@ src/fantasy_pl_ai_helper/scoring/engine.py
 src/fantasy_pl_ai_helper/storage/__init__.py
 src/fantasy_pl_ai_helper/storage/database.py
 src/fantasy_pl_ai_helper/storage/init_db.py
+src/fantasy_pl_ai_helper/storage/schema.sql
 tests/test_cli.py
+tests/test_ml.py
 tests/test_optimizer.py
+tests/test_projections.py
 tests/test_scoring.py
 tests/test_storage_schema.py

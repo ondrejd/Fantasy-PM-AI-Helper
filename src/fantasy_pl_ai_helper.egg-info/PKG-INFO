@@ -9,6 +9,7 @@ Requires-Dist: uvicorn[standard]>=0.30
 Requires-Dist: pydantic>=2.7
 Requires-Dist: httpx>=0.27
 Requires-Dist: requests>=2.31
+Requires-Dist: scikit-learn>=1.5
 Provides-Extra: dev
 Requires-Dist: pytest>=8; extra == "dev"
 Requires-Dist: pytest-cov>=5; extra == "dev"
@@ -17,7 +18,7 @@ Requires-Dist: httpx>=0.27; extra == "dev"
 # Fantasy Premier League AI Helper
 
 Lokální nástroj pro doporučování sestavy ve Fantasy Premier League (česká varianta bodování).  
-Používá veřejné FPL API, SQLite databázi, deterministický scoring engine a lokální LLM (Ollama) pro vysvětlení výběru.
+Používá veřejné FPL API, SQLite databázi, deterministický scoring engine, volitelný ML projekční model a lokální LLM (Ollama) pro vysvětlení výběru.
 
 ---
 
@@ -26,6 +27,9 @@ Používá veřejné FPL API, SQLite databázi, deterministický scoring engine 
 - Stahuje aktuální data z FPL API (hráči, týmy, herní kola, výsledky)
 - Počítá fantasy body podle **českých bodovacích tabulek** (viz [`fantasy-bodovani-fotbal.md`](fantasy-bodovani-fotbal.md))
 - Projektuje výkon hráčů na základě historického průměru, obtížnosti zápasu a pravděpodobnosti výhry týmu
+- Umí natrénovat ML model z historických gameweeků a použít ho místo baseline projekce
+- Ukládá per-gameweek feature snapshoty pro stabilní trénink a pozdější benchmarking
+- Umí po odehraném kole porovnat `baseline` a `ml` backend na stejných snapshot datech
 - Sestavuje optimální 11 hráčů (1 GK + 10 pole) v rámci rozpočtu £100M
 - Nabízí CLI, REST API a volitelné AI vysvětlení prostřednictvím lokálního modelu (Ollama / llama3.1:8b)
 
@@ -62,6 +66,11 @@ pip install -e ".[dev]"
 fantasy-pl update-data
 fantasy-pl rebuild-projections
 fantasy-pl recommend-lineup
+
+# ML varianta:
+fantasy-pl train-ml-model
+fantasy-pl rebuild-projections --backend ml
+fantasy-pl recommend-lineup --backend ml
 ```
 
 ---
@@ -71,11 +80,12 @@ fantasy-pl recommend-lineup
 | Příkaz | Popis |
 |---|---|
 | `update-data` | Stáhne aktuální data z FPL API do lokální SQLite databáze |
-| `rebuild-projections [--gameweek N]` | Přepočítá projekce bodů pro dané kolo |
-| `recommend-lineup [--gameweek N] [--exclude ID…] [--lock ID…]` | Sestaví doporučených 11 hráčů |
+| `train-ml-model [--upto-gameweek ID] [--output cesta.pkl]` | Natrénuje ML model z historických gameweeků |
+| `rebuild-projections [--gameweek N] [--backend baseline\|ml] [--ml-model-path cesta.pkl]` | Přepočítá projekce bodů pro dané kolo |
+| `recommend-lineup [--gameweek N] [--exclude ID…] [--lock ID…] [--backend baseline\|ml]` | Sestaví doporučených 11 hráčů |
 | `show-projections [--gameweek N] [--top N] [--position 1-4]` | Zobrazí top projekce |
-| `evaluate [--gameweek N]` | Porovná projekce se skutečnými body |
-| `evaluate-report [--rows N]` | Historický přehled přesnosti projekcí |
+| `evaluate [--gameweek N] [--ml-model-path cesta.pkl]` | Porovná uložené projekce se skutečnými body a zároveň ukáže `baseline vs ml` benchmark |
+| `evaluate-report [--rows N]` | Historický přehled přesnosti uložených projekcí |
 | `explain-lineup-ai [--gameweek N] [--model M]` | LLM vysvětlení sestavy |
 | `ask-ai "otázka" [--gameweek N] [--model M]` | Libovolný dotaz na LLM |
 
@@ -104,6 +114,31 @@ Dokumentace (Swagger UI): [http://localhost:8000/docs](http://localhost:8000/doc
 | `GET` | `/v1/gameweeks/{id}/lineup?exclude=5&lock=3` | Doporučená sestava |
 | `POST` | `/v1/gameweeks/{id}/evaluate` | Vyhodnocení projekcí |
 | `GET` | `/v1/evaluations/report` | Historický přehled |
+
+---
+
+## Docker pro Flutter klient
+
+API lze spustit v Dockeru jedním příkazem:
+
+```bash
+docker compose up --build -d app
+```
+
+API poběží na `http://127.0.0.1:8000`.
+
+Pokud chceš i AI funkce přes Ollamu v Dockeru, spusť navíc profil `ai`:
+
+```bash
+docker compose --profile ai up --build -d
+```
+
+### Jakou URL zadat do Flutter aplikace
+
+- Flutter Linux / macOS / Windows / Web: `http://127.0.0.1:8000`
+- Flutter Android emulator: `http://10.0.2.2:8000`
+
+> CORS pro localhost je v Docker konfiguraci přednastavený, takže Flutter web funguje bez dalších úprav.
 
 ---
 
@@ -158,8 +193,9 @@ src/fantasy_pl_ai_helper/
 ├── features/
 │   └── pipeline.py         # Výpočet příznaků (průměry, win-prob)
 ├── models/
-│   ├── projections.py      # Projekční model
-│   └── evaluation.py       # Evaluace přesnosti projekcí
+│   ├── projections.py      # Projekční model + feature snapshot persistence
+│   ├── ml.py               # Trénování a inference ML modelu
+│   └── evaluation.py       # Evaluace a baseline-vs-ML benchmarking
 ├── optimizer/
 │   └── lineup.py           # Greedy lineup optimizer
 ├── ai/
@@ -180,9 +216,10 @@ src/fantasy_pl_ai_helper/
 |---|---|---|
 | `FANTASY_PL_PROJECT_ROOT` | adresář projektu | Kořenový adresář projektu |
 | `FANTASY_PL_DATABASE_PATH` | `<root>/data/fantasy_pl.sqlite3` | Cesta k SQLite souboru |
+| `FANTASY_PL_PROJECTION_BACKEND` | `baseline` | Výchozí projekční backend |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | URL Ollama serveru |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Název modelu |
-| `OLLAMA_TIMEOUT_SECONDS` | `120` | Timeout pro AI požadavky |
+| `OLLAMA_TIMEOUT_SECONDS` | `600` | Timeout pro AI požadavky |
 
 ---
 
